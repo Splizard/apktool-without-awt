@@ -20,7 +20,6 @@ import android.util.TypedValue;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
-import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Logger;
@@ -279,7 +278,7 @@ public final class ResXmlEncoders {
 
     private static boolean isPrintableChar(char ch) {
         Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
-        return !Character.isISOControl(ch) && ch != KeyEvent.CHAR_UNDEFINED
+        return !Character.isISOControl(ch) && ch != '\uFFFF'
                 && block != null && block != Character.UnicodeBlock.SPECIALS;
     }
 }

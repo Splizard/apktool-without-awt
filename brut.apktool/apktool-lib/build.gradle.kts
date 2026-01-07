@@ -11,6 +11,7 @@ dependencies {
     implementation(libs.commons.lang3)
     implementation(libs.commons.io)
     implementation(libs.commons.text)
+    implementation(libs.pngj)
 
     testImplementation(libs.junit)
     testImplementation(libs.xmlunit)
@@ -30,9 +31,5 @@ tasks {
         // Increases validation of extra field of zip header. Some older Android apps
         // used this field to store data violating the zip specification.
         systemProperty("jdk.util.zip.disableZip64ExtraFieldValidation", true)
-
-        // Fix for AWT/X11 graphics environment issues in headless environments
-        // Required for tests that use ImageIO operations (nine-patch processing, etc.)
-        systemProperty("java.awt.headless", true)
     }
 }
