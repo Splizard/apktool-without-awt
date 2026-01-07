@@ -23,10 +23,15 @@ import brut.androlib.res.decoder.data.NinePatchData;
 import brut.util.BinaryDataInputStream;
 import org.apache.commons.io.IOUtils;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.awt.image.Raster;
-import java.awt.image.WritableRaster;
+import ar.com.hjg.pngj.ImageInfo;
+import ar.com.hjg.pngj.ImageLineHelper;
+import ar.com.hjg.pngj.ImageLineInt;
+import ar.com.hjg.pngj.PngReader;
+import ar.com.hjg.pngj.PngWriter;
+import ar.com.hjg.pngj.chunks.ChunkCopyBehaviour;
+import ar.com.hjg.pngj.chunks.PngChunkPLTE;
+import ar.com.hjg.pngj.chunks.PngChunkTRNS;
+
 import java.io.*;
 import java.nio.ByteOrder;
 
@@ -40,83 +45,143 @@ public class ResNinePatchStreamDecoder implements ResStreamDecoder {
                 return;
             }
 
-            BufferedImage im = ImageIO.read(new ByteArrayInputStream(data));
-            int w = im.getWidth(), h = im.getHeight();
+            PngReader pngr = new PngReader(new ByteArrayInputStream(data));
+            int w = pngr.imgInfo.cols;
+            int h = pngr.imgInfo.rows;
 
-            BufferedImage im2 = new BufferedImage(w + 2, h + 2, BufferedImage.TYPE_INT_ARGB);
-            if (im.getType() == BufferedImage.TYPE_CUSTOM) {
-                // TODO: Ensure this is gray + alpha case?
-                Raster srcRaster = im.getRaster();
-                WritableRaster dstRaster = im2.getRaster();
-                int[] gray = null, alpha = null;
-                for (int y = 0; y < im.getHeight(); y++) {
-                    gray = srcRaster.getSamples(0, y, w, 1, 0, gray);
-                    alpha = srcRaster.getSamples(0, y, w, 1, 1, alpha);
+            ImageInfo imInfo = new ImageInfo(w + 2, h + 2, 8, true);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            PngWriter pngw = new PngWriter(baos, imInfo);
 
-                    dstRaster.setSamples(1, y + 1, w, 1, 0, gray);
-                    dstRaster.setSamples(1, y + 1, w, 1, 1, gray);
-                    dstRaster.setSamples(1, y + 1, w, 1, 2, gray);
-                    dstRaster.setSamples(1, y + 1, w, 1, 3, alpha);
+            pngw.copyChunksFrom(pngr.getChunksList(), ChunkCopyBehaviour.COPY_ALL_SAFE);
+
+            int[][] pixels = new int[h + 2][w + 2];
+            for (int y = 0; y < h + 2; y++) {
+                for (int x = 0; x < w + 2; x++) {
+                    pixels[y][x] = 0x00000000;
                 }
-            } else {
-                im2.createGraphics().drawImage(im, 1, 1, w, h, null);
             }
 
+            boolean isIndexed = pngr.imgInfo.indexed;
+            boolean isGrayscaleAlpha = pngr.imgInfo.greyscale && pngr.imgInfo.alpha;
+            boolean hasAlpha = pngr.imgInfo.alpha;
+            int channels = pngr.imgInfo.channels;
+
+            PngChunkPLTE pal = null;
+            PngChunkTRNS trns = null;
+            if (isIndexed) {
+                pal = (PngChunkPLTE) pngr.getChunksList().getById1(PngChunkPLTE.ID);
+                trns = (PngChunkTRNS) pngr.getChunksList().getById1(PngChunkTRNS.ID);
+            }
+
+            for (int row = 0; row < h; row++) {
+                ImageLineInt line = (ImageLineInt) pngr.readRow(row);
+                int[] scanline = line.getScanline();
+
+                if (isIndexed && pal != null) {
+                    int[] rgba = ImageLineHelper.palette2rgba(line, pal, trns, null);
+                    for (int col = 0; col < w; col++) {
+                        int r = rgba[col * 4];
+                        int g = rgba[col * 4 + 1];
+                        int b = rgba[col * 4 + 2];
+                        int a = rgba[col * 4 + 3];
+                        pixels[row + 1][col + 1] = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
+                } else {
+                    for (int col = 0; col < w; col++) {
+                        int argb;
+                        if (isGrayscaleAlpha) {
+                            int gray = scanline[col * channels];
+                            int alpha = scanline[col * channels + 1];
+                            argb = (alpha << 24) | (gray << 16) | (gray << 8) | gray;
+                        } else if (pngr.imgInfo.greyscale) {
+                            int gray = scanline[col * channels];
+                            argb = 0xFF000000 | (gray << 16) | (gray << 8) | gray;
+                        } else if (hasAlpha) {
+                            int r = scanline[col * channels];
+                            int g = scanline[col * channels + 1];
+                            int b = scanline[col * channels + 2];
+                            int a = scanline[col * channels + 3];
+                            argb = (a << 24) | (r << 16) | (g << 8) | b;
+                        } else {
+                            int r = scanline[col * channels];
+                            int g = scanline[col * channels + 1];
+                            int b = scanline[col * channels + 2];
+                            argb = 0xFF000000 | (r << 16) | (g << 8) | b;
+                        }
+                        pixels[row + 1][col + 1] = argb;
+                    }
+                }
+            }
+            pngr.end();
+
             NinePatchData np = findNinePatchData(data);
-            drawHLine(im2, h + 1, np.paddingLeft + 1, w - np.paddingRight);
-            drawVLine(im2, w + 1, np.paddingTop + 1, h - np.paddingBottom);
+            drawHLine(pixels, h + 1, np.paddingLeft + 1, w - np.paddingRight);
+            drawVLine(pixels, w + 1, np.paddingTop + 1, h - np.paddingBottom);
 
             int[] xDivs = np.xDivs;
             if (xDivs.length == 0) {
-                drawHLine(im2, 0, 1, w);
+                drawHLine(pixels, 0, 1, w);
             } else {
                 for (int i = 0; i < xDivs.length; i += 2) {
-                    drawHLine(im2, 0, xDivs[i] + 1, xDivs[i + 1]);
+                    drawHLine(pixels, 0, xDivs[i] + 1, xDivs[i + 1]);
                 }
             }
 
             int[] yDivs = np.yDivs;
             if (yDivs.length == 0) {
-                drawVLine(im2, 0, 1, h);
+                drawVLine(pixels, 0, 1, h);
             } else {
                 for (int i = 0; i < yDivs.length; i += 2) {
-                    drawVLine(im2, 0, yDivs[i] + 1, yDivs[i + 1]);
+                    drawVLine(pixels, 0, yDivs[i] + 1, yDivs[i + 1]);
                 }
             }
 
-            // Some images optionally use optical inset/layout bounds
-            // https://developer.android.com/about/versions/android-4.3.html#OpticalBounds
             try {
                 LayoutBounds lb = findLayoutBounds(data);
 
                 for (int i = 0; i < lb.left; i++) {
                     int x = 1 + i;
-                    im2.setRGB(x, h + 1, LayoutBounds.COLOR_TICK);
+                    pixels[h + 1][x] = LayoutBounds.COLOR_TICK;
                 }
 
                 for (int i = 0; i < lb.right; i++) {
                     int x = w - i;
-                    im2.setRGB(x, h + 1, LayoutBounds.COLOR_TICK);
+                    pixels[h + 1][x] = LayoutBounds.COLOR_TICK;
                 }
 
                 for (int i = 0; i < lb.top; i++) {
                     int y = 1 + i;
-                    im2.setRGB(w + 1, y, LayoutBounds.COLOR_TICK);
+                    pixels[y][w + 1] = LayoutBounds.COLOR_TICK;
                 }
 
                 for (int i = 0; i < lb.bottom; i++) {
                     int y = h - i;
-                    im2.setRGB(w + 1, y, LayoutBounds.COLOR_TICK);
+                    pixels[y][w + 1] = LayoutBounds.COLOR_TICK;
                 }
             } catch (NinePatchNotFoundException ignored) {
-                // This chunk might not exist.
             }
 
-            ImageIO.write(im2, "png", out);
+            for (int row = 0; row < h + 2; row++) {
+                ImageLineInt line = new ImageLineInt(imInfo);
+                int[] scanline = line.getScanline();
+                for (int col = 0; col < w + 2; col++) {
+                    int argb = pixels[row][col];
+                    int r = (argb >> 16) & 0xFF;
+                    int g = (argb >> 8) & 0xFF;
+                    int b = argb & 0xFF;
+                    int a = (argb >> 24) & 0xFF;
+                    scanline[col * 4] = r;
+                    scanline[col * 4 + 1] = g;
+                    scanline[col * 4 + 2] = b;
+                    scanline[col * 4 + 3] = a;
+                }
+                pngw.writeRow(line);
+            }
+            pngw.end();
+
+            out.write(baos.toByteArray());
         } catch (IOException | NullPointerException ex) {
-            // In my case this was triggered because a .png file was
-            // containing a html document instead of an image.
-            // This could be more verbose and try to MIME?
             throw new AndrolibException(ex);
         }
     }
@@ -149,15 +214,15 @@ public class ResNinePatchStreamDecoder implements ResStreamDecoder {
         }
     }
 
-    private void drawHLine(BufferedImage im, int y, int x1, int x2) {
+    private void drawHLine(int[][] pixels, int y, int x1, int x2) {
         for (int x = x1; x <= x2; x++) {
-            im.setRGB(x, y, NinePatchData.COLOR_TICK);
+            pixels[y][x] = NinePatchData.COLOR_TICK;
         }
     }
 
-    private void drawVLine(BufferedImage im, int x, int y1, int y2) {
+    private void drawVLine(int[][] pixels, int x, int y1, int y2) {
         for (int y = y1; y <= y2; y++) {
-            im.setRGB(x, y, NinePatchData.COLOR_TICK);
+            pixels[y][x] = NinePatchData.COLOR_TICK;
         }
     }
 }

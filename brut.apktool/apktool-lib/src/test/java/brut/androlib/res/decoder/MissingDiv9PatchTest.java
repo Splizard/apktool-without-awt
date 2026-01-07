@@ -22,8 +22,9 @@ import brut.androlib.res.decoder.data.NinePatchData;
 import brut.common.BrutException;
 import brut.directory.ExtFile;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import ar.com.hjg.pngj.ImageLineInt;
+import ar.com.hjg.pngj.PngReader;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -52,12 +53,20 @@ public class MissingDiv9PatchTest extends BaseTest {
             data = out.toByteArray();
         }
 
-        BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
-        int height = image.getHeight() - 1;
+        PngReader pngr = new PngReader(new ByteArrayInputStream(data));
+        int height = pngr.imgInfo.rows - 1;
+        int channels = pngr.imgInfo.channels;
 
-        // First and last pixel will be invisible, so lets check the first column and ensure its all black
         for (int y = 1; y < height; y++) {
-            assertEquals("y coordinate failed at: " + y, NinePatchData.COLOR_TICK, image.getRGB(0, y));
+            ImageLineInt line = (ImageLineInt) pngr.readRow(y);
+            int[] scanline = line.getScanline();
+            int r = scanline[0];
+            int g = scanline[1];
+            int b = scanline[2];
+            int a = scanline[3];
+            int argb = (a << 24) | (r << 16) | (g << 8) | b;
+            assertEquals("y coordinate failed at: " + y, NinePatchData.COLOR_TICK, argb);
         }
+        pngr.end();
     }
 }

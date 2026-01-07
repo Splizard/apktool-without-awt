@@ -24,8 +24,9 @@ import org.w3c.dom.Document;
 import org.w3c.dom.NamedNodeMap;
 import org.w3c.dom.Node;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import ar.com.hjg.pngj.ImageLineInt;
+import ar.com.hjg.pngj.PngReader;
+
 import java.io.File;
 import java.io.IOException;
 
@@ -443,17 +444,12 @@ public class BuildAndDecodeApkTest extends BaseTest {
         File control = new File(sTestOrigDir, fileName);
         File test = new File(sTestNewDir, fileName);
 
-        BufferedImage controlImage = ImageIO.read(control);
-        BufferedImage testImage = ImageIO.read(test);
+        int[][] controlPixels = readPngPixels(control);
+        int[][] testPixels = readPngPixels(test);
 
-        // lets start with 0,0 - empty
-        assertEquals(controlImage.getRGB(0, 0), testImage.getRGB(0, 0));
-
-        // then with 30, 0 - black
-        assertEquals(controlImage.getRGB(30, 0), testImage.getRGB(30, 0));
-
-        // then 30, 30 - blue
-        assertEquals(controlImage.getRGB(30, 30), testImage.getRGB(30, 30));
+        assertEquals(controlPixels[0][0], testPixels[0][0]);
+        assertEquals(controlPixels[0][30], testPixels[0][30]);
+        assertEquals(controlPixels[30][30], testPixels[30][30]);
     }
 
     @Test
@@ -463,17 +459,12 @@ public class BuildAndDecodeApkTest extends BaseTest {
         File control = new File(sTestOrigDir, fileName);
         File test = new File(sTestNewDir, fileName);
 
-        BufferedImage controlImage = ImageIO.read(control);
-        BufferedImage testImage = ImageIO.read(test);
+        int[][] controlPixels = readPngPixels(control);
+        int[][] testPixels = readPngPixels(test);
 
-        // 0, 0 = clear
-        assertEquals(controlImage.getRGB(0, 0), testImage.getRGB(0, 0));
-
-        // 30, 0 = black line
-        assertEquals(controlImage.getRGB(0, 30), testImage.getRGB(0, 30));
-
-        // 30, 30 = greyish button
-        assertEquals(controlImage.getRGB(30, 30), testImage.getRGB(30, 30));
+        assertEquals(controlPixels[0][0], testPixels[0][0]);
+        assertEquals(controlPixels[30][0], testPixels[30][0]);
+        assertEquals(controlPixels[30][30], testPixels[30][30]);
     }
 
     @Test
@@ -483,18 +474,17 @@ public class BuildAndDecodeApkTest extends BaseTest {
         File control = new File(sTestOrigDir, fileName);
         File test = new File(sTestNewDir, fileName);
 
-        BufferedImage controlImage = ImageIO.read(control);
-        BufferedImage testImage = ImageIO.read(test);
+        int[][] controlPixels = readPngPixels(control);
+        int[][] testPixels = readPngPixels(test);
 
-        // Check entire image as we cannot mess this up
-        int w = controlImage.getWidth();
-        int h = controlImage.getHeight();
+        int h = controlPixels.length;
+        int w = controlPixels[0].length;
 
-        int[] controlImageGrid = controlImage.getRGB(0, 0, w, h, null, 0, w);
-        int[] testImageGrid = testImage.getRGB(0, 0, w, h, null, 0, w);
-
-        for (int i = 0; i < controlImageGrid.length; i++) {
-            assertEquals("Image lost Optical Bounds at i = " + i, controlImageGrid[i], testImageGrid[i]);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                assertEquals("Image lost Optical Bounds at (" + x + "," + y + ")",
+                        controlPixels[y][x], testPixels[y][x]);
+            }
         }
     }
 
@@ -514,29 +504,27 @@ public class BuildAndDecodeApkTest extends BaseTest {
             File control = new File(sTestOrigDir, fileName);
             File test = new File(sTestNewDir, fileName);
 
-            BufferedImage controlImage = ImageIO.read(control);
-            BufferedImage testImage = ImageIO.read(test);
+            int[][] controlPixels = readPngPixels(control);
+            int[][] testPixels = readPngPixels(test);
 
-            int w = controlImage.getWidth();
-            int h = controlImage.getHeight();
+            int h = controlPixels.length;
+            int w = controlPixels[0].length;
 
-            // Check the entire horizontal line
             for (int i = 1; i < w; i++) {
-                if (isTransparent(controlImage.getRGB(i, 0))) {
-                    assertTrue(isTransparent(testImage.getRGB(i, 0)));
+                if (isTransparent(controlPixels[0][i])) {
+                    assertTrue(isTransparent(testPixels[0][i]));
                 } else {
                     assertEquals("Image lost npTc chunk on image " + ninePatch + " at (x, y) (" + i + "," + 0 + ")",
-                            controlImage.getRGB(i, 0), testImage.getRGB(i, 0));
+                            controlPixels[0][i], testPixels[0][i]);
                 }
             }
 
-            // Check the entire vertical line
             for (int i = 1; i < h; i++) {
-                if (isTransparent(controlImage.getRGB(0, i))) {
-                    assertTrue(isTransparent(testImage.getRGB(0, i)));
+                if (isTransparent(controlPixels[i][0])) {
+                    assertTrue(isTransparent(testPixels[i][0]));
                 } else {
                     assertEquals("Image lost npTc chunk on image " + ninePatch + " at (x, y) (" + 0 + "," + i + ")",
-                            controlImage.getRGB(0, i), testImage.getRGB(0, i));
+                            controlPixels[i][0], testPixels[i][0]);
                 }
             }
         }
@@ -544,6 +532,48 @@ public class BuildAndDecodeApkTest extends BaseTest {
 
     private static boolean isTransparent(int pixel) {
         return pixel >> 24 == 0;
+    }
+
+    private static int[][] readPngPixels(File file) throws IOException {
+        PngReader pngr = new PngReader(file);
+        int w = pngr.imgInfo.cols;
+        int h = pngr.imgInfo.rows;
+        int channels = pngr.imgInfo.channels;
+        boolean hasAlpha = pngr.imgInfo.alpha;
+        boolean isGrayscale = pngr.imgInfo.greyscale;
+
+        int[][] pixels = new int[h][w];
+
+        for (int row = 0; row < h; row++) {
+            ImageLineInt line = (ImageLineInt) pngr.readRow(row);
+            int[] scanline = line.getScanline();
+
+            for (int col = 0; col < w; col++) {
+                int argb;
+                if (isGrayscale && hasAlpha) {
+                    int gray = scanline[col * channels];
+                    int alpha = scanline[col * channels + 1];
+                    argb = (alpha << 24) | (gray << 16) | (gray << 8) | gray;
+                } else if (isGrayscale) {
+                    int gray = scanline[col * channels];
+                    argb = 0xFF000000 | (gray << 16) | (gray << 8) | gray;
+                } else if (hasAlpha) {
+                    int r = scanline[col * channels];
+                    int g = scanline[col * channels + 1];
+                    int b = scanline[col * channels + 2];
+                    int a = scanline[col * channels + 3];
+                    argb = (a << 24) | (r << 16) | (g << 8) | b;
+                } else {
+                    int r = scanline[col * channels];
+                    int g = scanline[col * channels + 1];
+                    int b = scanline[col * channels + 2];
+                    argb = 0xFF000000 | (r << 16) | (g << 8) | b;
+                }
+                pixels[row][col] = argb;
+            }
+        }
+        pngr.end();
+        return pixels;
     }
 
     @Test
