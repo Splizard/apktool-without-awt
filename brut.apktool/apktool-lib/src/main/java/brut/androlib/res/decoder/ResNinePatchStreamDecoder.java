@@ -24,10 +24,13 @@ import brut.util.BinaryDataInputStream;
 import org.apache.commons.io.IOUtils;
 
 import ar.com.hjg.pngj.ImageInfo;
+import ar.com.hjg.pngj.ImageLineHelper;
 import ar.com.hjg.pngj.ImageLineInt;
 import ar.com.hjg.pngj.PngReader;
 import ar.com.hjg.pngj.PngWriter;
 import ar.com.hjg.pngj.chunks.ChunkCopyBehaviour;
+import ar.com.hjg.pngj.chunks.PngChunkPLTE;
+import ar.com.hjg.pngj.chunks.PngChunkTRNS;
 
 import java.io.*;
 import java.nio.ByteOrder;
@@ -59,36 +62,55 @@ public class ResNinePatchStreamDecoder implements ResStreamDecoder {
                 }
             }
 
+            boolean isIndexed = pngr.imgInfo.indexed;
             boolean isGrayscaleAlpha = pngr.imgInfo.greyscale && pngr.imgInfo.alpha;
             boolean hasAlpha = pngr.imgInfo.alpha;
             int channels = pngr.imgInfo.channels;
+
+            PngChunkPLTE pal = null;
+            PngChunkTRNS trns = null;
+            if (isIndexed) {
+                pal = (PngChunkPLTE) pngr.getChunksList().getById1(PngChunkPLTE.ID);
+                trns = (PngChunkTRNS) pngr.getChunksList().getById1(PngChunkTRNS.ID);
+            }
 
             for (int row = 0; row < h; row++) {
                 ImageLineInt line = (ImageLineInt) pngr.readRow(row);
                 int[] scanline = line.getScanline();
 
-                for (int col = 0; col < w; col++) {
-                    int argb;
-                    if (isGrayscaleAlpha) {
-                        int gray = scanline[col * channels];
-                        int alpha = scanline[col * channels + 1];
-                        argb = (alpha << 24) | (gray << 16) | (gray << 8) | gray;
-                    } else if (pngr.imgInfo.greyscale) {
-                        int gray = scanline[col * channels];
-                        argb = 0xFF000000 | (gray << 16) | (gray << 8) | gray;
-                    } else if (hasAlpha) {
-                        int r = scanline[col * channels];
-                        int g = scanline[col * channels + 1];
-                        int b = scanline[col * channels + 2];
-                        int a = scanline[col * channels + 3];
-                        argb = (a << 24) | (r << 16) | (g << 8) | b;
-                    } else {
-                        int r = scanline[col * channels];
-                        int g = scanline[col * channels + 1];
-                        int b = scanline[col * channels + 2];
-                        argb = 0xFF000000 | (r << 16) | (g << 8) | b;
+                if (isIndexed && pal != null) {
+                    int[] rgba = ImageLineHelper.palette2rgba(line, pal, trns, null);
+                    for (int col = 0; col < w; col++) {
+                        int r = rgba[col * 4];
+                        int g = rgba[col * 4 + 1];
+                        int b = rgba[col * 4 + 2];
+                        int a = rgba[col * 4 + 3];
+                        pixels[row + 1][col + 1] = (a << 24) | (r << 16) | (g << 8) | b;
                     }
-                    pixels[row + 1][col + 1] = argb;
+                } else {
+                    for (int col = 0; col < w; col++) {
+                        int argb;
+                        if (isGrayscaleAlpha) {
+                            int gray = scanline[col * channels];
+                            int alpha = scanline[col * channels + 1];
+                            argb = (alpha << 24) | (gray << 16) | (gray << 8) | gray;
+                        } else if (pngr.imgInfo.greyscale) {
+                            int gray = scanline[col * channels];
+                            argb = 0xFF000000 | (gray << 16) | (gray << 8) | gray;
+                        } else if (hasAlpha) {
+                            int r = scanline[col * channels];
+                            int g = scanline[col * channels + 1];
+                            int b = scanline[col * channels + 2];
+                            int a = scanline[col * channels + 3];
+                            argb = (a << 24) | (r << 16) | (g << 8) | b;
+                        } else {
+                            int r = scanline[col * channels];
+                            int g = scanline[col * channels + 1];
+                            int b = scanline[col * channels + 2];
+                            argb = 0xFF000000 | (r << 16) | (g << 8) | b;
+                        }
+                        pixels[row + 1][col + 1] = argb;
+                    }
                 }
             }
             pngr.end();
